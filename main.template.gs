@@ -8,9 +8,8 @@ const CONFIG = {
     IGNORE: 'ignore',
     OVERWRITE: 'overwrite',
   },
-  // Performance optimization settings
-  BATCH_SIZE: 50, // Process messages in batches to avoid quota issues
-  CACHE_FOLDER_STRUCTURE: true, // Cache folder lookups
+  BATCH_SIZE: 50,
+  CACHE_FOLDER_STRUCTURE: true,
 };
 
 // Property Keys
@@ -113,11 +112,16 @@ function buildFileCache(rootFolder) {
  */
 function processSingleEmail(msg, folder, fileCache) {
   const date = msg.getDate();
+  const subject = msg.getSubject();
   const filename = generateEmailFilename(msg, date);
   const year = String(date.getFullYear());
 
   // Check cache first (much faster than Drive API calls)
   if (fileCache[year] && fileCache[year][filename]) {
+    // Skip duplicate logging to avoid performance overhead (~1 second per 100 emails)
+    // Each Logger.log() call costs 10-15ms;
+    // Uncomment the line below if you need to see which emails are duplicates (for debugging)
+    //Logger.log(`[DUPLICATE] ${date.toISOString()} - ${subject}`);
     return handleDuplicateEmail(fileCache[year][filename], filename, CONFIG.DUPLICATE_MODE);
   }
 
@@ -131,7 +135,8 @@ function processSingleEmail(msg, folder, fileCache) {
   }
   fileCache[year][filename] = savedFile;
 
-  Logger.log(`Saved email: ${filename}`);
+  // Log newly saved emails only (much faster than logging all)
+  Logger.log(`[SAVED] ${date.toISOString()} - ${subject}`);
 
   return {
     status: 'savedCount',
@@ -141,14 +146,12 @@ function processSingleEmail(msg, folder, fileCache) {
 
 /**
  * Generates a sanitized filename for the email
- * Uses simpler approach for faster performance
  * @param {GmailMessage} msg - The email message
  * @param {Date} date - The email date
  * @returns {string} Sanitized filename with .eml extension
  */
 function generateEmailFilename(msg, date) {
   const subject = msg.getSubject();
-  // Pre-compile regex for better performance
   const sanitized = `${date.toISOString()} - ${subject}`.replace(/[\/\\?%*:|"<>]/g, '_');
   return `${sanitized}.eml`;
 }
@@ -180,7 +183,6 @@ function getOrCreateYearFolder(parentFolder, date) {
  */
 function handleDuplicateEmail(existingFile, filename, duplicateMode) {
   if (duplicateMode === CONFIG.DUPLICATE_MODES.IGNORE) {
-    // Don't log for every duplicate - too much logging slows things down
     return { status: 'skippedCount' };
   }
 
@@ -194,7 +196,6 @@ function handleDuplicateEmail(existingFile, filename, duplicateMode) {
 
 /**
  * Saves the email as an .eml file to the specified folder
- * Batch updates file metadata to reduce API calls
  * @param {Folder} folder - The folder to save to
  * @param {string} filename - The filename
  * @param {GmailMessage} msg - The email message
@@ -204,7 +205,7 @@ function handleDuplicateEmail(existingFile, filename, duplicateMode) {
 function saveEmailToFolder(folder, filename, msg, date) {
   const file = folder.createFile(filename, msg.getRawContent(), MimeType.PLAIN_TEXT);
 
-  // Set file metadata - this is an expensive operation, but necessary
+  // Set file metadata
   Drive.Files.update(
     { modifiedTime: date.toISOString() },
     file.getId()
