@@ -30,9 +30,6 @@ function saveNewEmailsToDrive() {
     const lastRun = getLastRunTimestamp();
     let newestTimestamp = 0;
 
-    // Build a cache of existing files keyed by year and filename for O(1) lookup
-    const fileCache = buildFileCache(folder);
-
     const threads = GmailApp.search(`after:${lastRun}`);
 
     // Collect all messages first, then process in batches
@@ -42,6 +39,17 @@ function saveNewEmailsToDrive() {
         allMessages.push(msg);
       });
     });
+
+    // Determine which years we actually need to cache
+    // Only cache folders for years that contain emails in this batch (much faster!)
+    const yearsNeeded = new Set();
+    allMessages.forEach(msg => {
+      const year = String(msg.getDate().getFullYear());
+      yearsNeeded.add(year);
+    });
+
+    // Build cache only for the years we need
+    const fileCache = buildFileCacheForYears(folder, yearsNeeded);
 
     // Process messages in batches
     const batchCount = Math.ceil(allMessages.length / CONFIG.BATCH_SIZE);
@@ -77,18 +85,26 @@ function saveNewEmailsToDrive() {
 }
 
 /**
- * Builds a cache of existing files by year and filename for fast lookups
+ * Builds a cache of existing files ONLY for specified years
+ * Much faster than caching all years when you only need a few
  * @param {Folder} rootFolder - The root Google Drive folder
+ * @param {Set} yearsNeeded - Set of year strings to cache (e.g., {'2025', '2024'})
  * @returns {Object} Cache structure: { year: { filename: file } }
  */
-function buildFileCache(rootFolder) {
+function buildFileCacheForYears(rootFolder, yearsNeeded) {
   const cache = {};
 
-  // Get all year folders
+  // Only iterate through year folders we actually need
   const yearFolders = rootFolder.getFolders();
   while (yearFolders.hasNext()) {
     const yearFolder = yearFolders.next();
     const year = yearFolder.getName();
+
+    // Skip folders we don't need (huge speedup if you have many years!)
+    if (!yearsNeeded.has(year)) {
+      continue;
+    }
+
     cache[year] = {};
 
     // Cache all files in this year folder
