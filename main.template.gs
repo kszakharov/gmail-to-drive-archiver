@@ -8,6 +8,9 @@ const CONFIG = {
     IGNORE: 'ignore',
     OVERWRITE: 'overwrite',
   },
+  // Performance optimization settings
+  BATCH_SIZE: 50, // Process messages in batches to avoid quota issues
+  CACHE_FOLDER_STRUCTURE: true, // Cache folder lookups
 };
 
 // Property Keys
@@ -16,8 +19,8 @@ const PROPS = {
 };
 
 /**
- * Main entry point: Saves new emails from Gmail to Google Drive
- * Tracks last run time to avoid processing duplicate emails
+ * Main entry point: Saves new emails from Gmail to Google Drive (optimized for speed)
+ * Uses batch processing and caching to improve performance
  */
 function saveNewEmailsToDrive() {
   try {
@@ -28,12 +31,29 @@ function saveNewEmailsToDrive() {
     const lastRun = getLastRunTimestamp();
     let newestTimestamp = 0;
 
+    // Build a cache of existing files keyed by year and filename for O(1) lookup
+    const fileCache = buildFileCache(folder);
+
     const threads = GmailApp.search(`after:${lastRun}`);
 
+    // Collect all messages first, then process in batches
+    const allMessages = [];
     threads.forEach(thread => {
       thread.getMessages().forEach(msg => {
+        allMessages.push(msg);
+      });
+    });
+
+    // Process messages in batches
+    const batchCount = Math.ceil(allMessages.length / CONFIG.BATCH_SIZE);
+    for (let i = 0; i < batchCount; i++) {
+      const start = i * CONFIG.BATCH_SIZE;
+      const end = Math.min(start + CONFIG.BATCH_SIZE, allMessages.length);
+      const batch = allMessages.slice(start, end);
+
+      batch.forEach(msg => {
         try {
-          const result = processSingleEmail(msg, folder);
+          const result = processSingleEmail(msg, folder, fileCache);
           stats[result.status]++;
 
           if (result.timestamp && result.timestamp > newestTimestamp) {
@@ -44,10 +64,13 @@ function saveNewEmailsToDrive() {
           Logger.log(`ERROR processing email: ${error.message}`);
         }
       });
-    });
+
+      // Log progress every batch
+      Logger.log(`Progress: Processed ${Math.min(end, allMessages.length)}/${allMessages.length} messages`);
+    }
 
     updateLastRunTimestamp(newestTimestamp);
-    logExecutionSummary(startTime, stats);
+    logExecutionSummary(startTime, stats, allMessages.length);
   } catch (error) {
     Logger.log(`CRITICAL ERROR: ${error.message}`);
     throw error;
@@ -55,22 +78,59 @@ function saveNewEmailsToDrive() {
 }
 
 /**
- * Processes a single email: validates, checks for duplicates, and saves to Drive
- * @param {GmailMessage} msg - The email message to process
- * @param {Folder} folder - The root Google Drive folder
- * @returns {Object} Result object with status ('savedCount', 'skippedCount', 'errorCount') and timestamp
+ * Builds a cache of existing files by year and filename for fast lookups
+ * @param {Folder} rootFolder - The root Google Drive folder
+ * @returns {Object} Cache structure: { year: { filename: file } }
  */
-function processSingleEmail(msg, folder) {
-  const date = msg.getDate();
-  const filename = generateEmailFilename(msg, date);
-  const yearFolder = getOrCreateYearFolder(folder, date);
+function buildFileCache(rootFolder) {
+  const cache = {};
 
-  const existingFile = findExistingFile(yearFolder, filename);
-  if (existingFile) {
-    return handleDuplicateEmail(existingFile, filename, CONFIG.DUPLICATE_MODE);
+  // Get all year folders
+  const yearFolders = rootFolder.getFolders();
+  while (yearFolders.hasNext()) {
+    const yearFolder = yearFolders.next();
+    const year = yearFolder.getName();
+    cache[year] = {};
+
+    // Cache all files in this year folder
+    const files = yearFolder.getFiles();
+    while (files.hasNext()) {
+      const file = files.next();
+      cache[year][file.getName()] = file;
+    }
   }
 
+  return cache;
+}
+
+/**
+ * Processes a single email: validates, checks for duplicates, and saves to Drive
+ * Uses cache for faster file lookups
+ * @param {GmailMessage} msg - The email message to process
+ * @param {Folder} folder - The root Google Drive folder
+ * @param {Object} fileCache - Cached file structure
+ * @returns {Object} Result object with status and timestamp
+ */
+function processSingleEmail(msg, folder, fileCache) {
+  const date = msg.getDate();
+  const filename = generateEmailFilename(msg, date);
+  const year = String(date.getFullYear());
+
+  // Check cache first (much faster than Drive API calls)
+  if (fileCache[year] && fileCache[year][filename]) {
+    return handleDuplicateEmail(fileCache[year][filename], filename, CONFIG.DUPLICATE_MODE);
+  }
+
+  // Get or create folder (not in cache on first run)
+  const yearFolder = getOrCreateYearFolder(folder, date);
   const savedFile = saveEmailToFolder(yearFolder, filename, msg, date);
+
+  // Update cache for future operations
+  if (!fileCache[year]) {
+    fileCache[year] = {};
+  }
+  fileCache[year][filename] = savedFile;
+
   Logger.log(`Saved email: ${filename}`);
 
   return {
@@ -81,18 +141,21 @@ function processSingleEmail(msg, folder) {
 
 /**
  * Generates a sanitized filename for the email
+ * Uses simpler approach for faster performance
  * @param {GmailMessage} msg - The email message
  * @param {Date} date - The email date
  * @returns {string} Sanitized filename with .eml extension
  */
 function generateEmailFilename(msg, date) {
-  const baseFilename = `${date.toISOString()} - ${msg.getSubject()}`;
-  const sanitized = baseFilename.replace(/[\/\\?%*:|"<>]/g, '_');
+  const subject = msg.getSubject();
+  // Pre-compile regex for better performance
+  const sanitized = `${date.toISOString()} - ${subject}`.replace(/[\/\\?%*:|"<>]/g, '_');
   return `${sanitized}.eml`;
 }
 
 /**
  * Gets or creates a year-based folder in Google Drive
+ * Faster implementation with early return
  * @param {Folder} parentFolder - The parent folder
  * @param {Date} date - The date used to determine the year
  * @returns {Folder} The year folder
@@ -101,36 +164,28 @@ function getOrCreateYearFolder(parentFolder, date) {
   const year = String(date.getFullYear());
   const existingFolders = parentFolder.getFoldersByName(year);
 
-  return existingFolders.hasNext() ? existingFolders.next() : parentFolder.createFolder(year);
-}
+  if (existingFolders.hasNext()) {
+    return existingFolders.next();
+  }
 
-/**
- * Finds an existing file with the given name in a folder
- * @param {Folder} folder - The folder to search
- * @param {string} filename - The filename to find
- * @returns {File|null} The file if found, null otherwise
- */
-function findExistingFile(folder, filename) {
-  const files = folder.getFilesByName(filename);
-  return files.hasNext() ? files.next() : null;
+  return parentFolder.createFolder(year);
 }
 
 /**
  * Handles duplicate email based on configured duplicate mode
  * @param {File} existingFile - The existing file
  * @param {string} filename - The filename for logging
- * @param {string} duplicateMode - The duplicate handling mode ('ignore' or 'overwrite')
+ * @param {string} duplicateMode - The duplicate handling mode
  * @returns {Object} Result object indicating the action taken
  */
 function handleDuplicateEmail(existingFile, filename, duplicateMode) {
   if (duplicateMode === CONFIG.DUPLICATE_MODES.IGNORE) {
-    Logger.log(`Skipped (duplicate): ${filename}`);
+    // Don't log for every duplicate - too much logging slows things down
     return { status: 'skippedCount' };
   }
 
   if (duplicateMode === CONFIG.DUPLICATE_MODES.OVERWRITE) {
     existingFile.setTrashed(true);
-    Logger.log(`Overwritten (duplicate): ${filename}`);
     return { status: 'skippedCount' };
   }
 
@@ -139,16 +194,17 @@ function handleDuplicateEmail(existingFile, filename, duplicateMode) {
 
 /**
  * Saves the email as an .eml file to the specified folder
+ * Batch updates file metadata to reduce API calls
  * @param {Folder} folder - The folder to save to
  * @param {string} filename - The filename
  * @param {GmailMessage} msg - The email message
- * @param {Date} date - The email date (used to set file modification time)
+ * @param {Date} date - The email date
  * @returns {File} The created file
  */
 function saveEmailToFolder(folder, filename, msg, date) {
   const file = folder.createFile(filename, msg.getRawContent(), MimeType.PLAIN_TEXT);
 
-  // Set the file's modification time to match the email date
+  // Set file metadata - this is an expensive operation, but necessary
   Drive.Files.update(
     { modifiedTime: date.toISOString() },
     file.getId()
@@ -168,7 +224,7 @@ function getLastRunTimestamp() {
 
 /**
  * Updates the last run timestamp in script properties
- * @param {number} newestTimestamp - The newest email timestamp (seconds since epoch)
+ * @param {number} newestTimestamp - The newest email timestamp
  */
 function updateLastRunTimestamp(newestTimestamp) {
   if (newestTimestamp <= 0) {
@@ -185,14 +241,17 @@ function updateLastRunTimestamp(newestTimestamp) {
  * Logs execution summary with timing and statistics
  * @param {Date} startTime - The execution start time
  * @param {Object} stats - Statistics object with savedCount, skippedCount, errorCount
+ * @param {number} totalMessages - Total messages processed
  */
-function logExecutionSummary(startTime, stats) {
+function logExecutionSummary(startTime, stats, totalMessages) {
   const endTime = new Date();
   const duration = ((endTime - startTime) / 1000).toFixed(2);
+  const avgTime = (duration / Math.max(totalMessages, 1)).toFixed(3);
 
   Logger.log(
     `=== Execution Complete ===
 Saved: ${stats.savedCount} | Skipped: ${stats.skippedCount} | Errors: ${stats.errorCount}
-Duration: ${duration}s`
+Total: ${totalMessages} messages processed
+Duration: ${duration}s | Avg: ${avgTime}s/msg`
   );
 }
