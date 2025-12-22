@@ -41,7 +41,7 @@ function saveNewEmailsToDrive() {
     const lastRunTimestamp = parseInt(lastRun);
     let newestTimestamp = 0;
 
-    const threads = GmailApp.search(`after:${lastRun}`);
+    const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${lastRun}`);
 
     // Collect all messages first, then process in batches
     const allMessages = [];
