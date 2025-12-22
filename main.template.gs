@@ -38,6 +38,7 @@ function saveNewEmailsToDrive() {
 
     const folder = DriveApp.getFolderById(CONFIG.FOLDER_ID);
     const lastRun = getLastRunTimestamp();
+    const lastRunTimestamp = parseInt(lastRun);
     let newestTimestamp = 0;
 
     const threads = GmailApp.search(`after:${lastRun}`);
@@ -46,7 +47,9 @@ function saveNewEmailsToDrive() {
     const allMessages = [];
     threads.forEach(thread => {
       thread.getMessages().forEach(msg => {
-        allMessages.push(msg);
+        if (Math.floor(msg.getDate().getTime() / 1000) > lastRunTimestamp) {
+          allMessages.push(msg);
+        }
       });
     });
 
