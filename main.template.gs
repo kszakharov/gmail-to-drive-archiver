@@ -178,7 +178,7 @@ function navigateToFolderPath(rootFolder, path) {
 function processSingleEmail(msg, folder, fileCache) {
   const date = msg.getDate();
   const subject = msg.getSubject();
-  const filename = generateEmailFilename(msg, date);
+  const filename = generateEmailFilename(date, subject);
   const folderPath = getFolderPath(date);
 
   // Check cache first (much faster than Drive API calls)
@@ -186,7 +186,7 @@ function processSingleEmail(msg, folder, fileCache) {
     // Skip duplicate logging to avoid performance overhead (~1 second per 100 emails)
     // Each Logger.log() call costs 10-15ms;
     // Uncomment the line below if you need to see which emails are duplicates (for debugging)
-    //Logger.log(`[DUPLICATE] ${date.toISOString()} - ${subject}`);
+    //Logger.log(`[DUPLICATE] ${filename}`);
     return handleDuplicateEmail(fileCache[folderPath][filename], filename, CONFIG.DUPLICATE_MODE);
   }
 
@@ -201,7 +201,7 @@ function processSingleEmail(msg, folder, fileCache) {
   fileCache[folderPath][filename] = savedFile;
 
   // Log newly saved emails only (much faster than logging all)
-  Logger.log(`[SAVED] ${date.toISOString()} - ${subject}`);
+  Logger.log(`[SAVED] ${filename}`);
 
   return {
     status: 'savedCount',
@@ -232,15 +232,22 @@ function getOrCreateFolderPath(rootFolder, path) {
 }
 
 /**
- * Generates a sanitized filename for the email
- * @param {GmailMessage} msg - The email message
- * @param {Date} date - The email date
+ * Generates a sanitized filename for the email using local timezone
+ * Format: YYYY-MM-DDTHH_MM_SS Subject.eml
+ * @param {Date} date - The email date (in local timezone)
+ * @param {string} subject - The email subject
  * @returns {string} Sanitized filename with .eml extension
  */
-function generateEmailFilename(msg, date) {
-  const subject = msg.getSubject();
-  const sanitized = `${date.toISOString()} - ${subject}`.replace(/[\/\\?%*:|"<>]/g, '_');
-  return `${sanitized}.eml`;
+function generateEmailFilename(date, subject) {
+  // Format date using Utilities.formatDate() for local timezone
+  // Format: YYYY-MM-DDTHH_MM_SS
+  const timestamp = Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH_mm_ss");
+
+  // Sanitize subject line and remove problematic characters
+  const sanitizedSubject = subject.replace(/[\/\\?%*:|"<>]/g, '_');
+
+  // Combine timestamp and subject
+  return `${timestamp} ${sanitizedSubject}.eml`;
 }
 
 /**
@@ -274,7 +281,7 @@ function handleDuplicateEmail(existingFile, filename, duplicateMode) {
 function saveEmailToFolder(folder, filename, msg, date) {
   const file = folder.createFile(filename, msg.getRawContent(), MimeType.PLAIN_TEXT);
 
-  // Set file metadata
+  // Set file metadata to match the email's received date
   Drive.Files.update(
     { modifiedTime: date.toISOString() },
     file.getId()
