@@ -10,6 +10,12 @@ const CONFIG = {
   },
   BATCH_SIZE: 50,
   CACHE_FOLDER_STRUCTURE: true,
+
+  // Folder granularity: 'yearly', 'monthly', or 'daily'
+  // yearly:  folder/YYYY/email.eml
+  // monthly: folder/YYYY/MM/email.eml
+  // daily:   folder/YYYY/YYYYMMDD/email.eml
+  GRANULARITY: '__GRANULARITY__',
 };
 
 // Property Keys
@@ -20,6 +26,7 @@ const PROPS = {
 /**
  * Main entry point: Saves new emails from Gmail to Google Drive (optimized for speed)
  * Uses batch processing and caching to improve performance
+ * Supports multiple folder organization granularities
  */
 function saveNewEmailsToDrive() {
   try {
@@ -40,16 +47,15 @@ function saveNewEmailsToDrive() {
       });
     });
 
-    // Determine which years we actually need to cache
-    // Only cache folders for years that contain emails in this batch (much faster!)
-    const yearsNeeded = new Set();
+    // Determine which folder paths we actually need to cache based on granularity
+    const pathsNeeded = new Set();
     allMessages.forEach(msg => {
-      const year = String(msg.getDate().getFullYear());
-      yearsNeeded.add(year);
+      const path = getFolderPath(msg.getDate());
+      pathsNeeded.add(path);
     });
 
-    // Build cache only for the years we need
-    const fileCache = buildFileCacheForYears(folder, yearsNeeded);
+    // Build cache only for the folder paths we need
+    const fileCache = buildFileCacheForPaths(folder, pathsNeeded);
 
     // Process messages in batches
     const batchCount = Math.ceil(allMessages.length / CONFIG.BATCH_SIZE);
@@ -85,37 +91,80 @@ function saveNewEmailsToDrive() {
 }
 
 /**
- * Builds a cache of existing files ONLY for specified years
- * Much faster than caching all years when you only need a few
- * @param {Folder} rootFolder - The root Google Drive folder
- * @param {Set} yearsNeeded - Set of year strings to cache (e.g., {'2025', '2024'})
- * @returns {Object} Cache structure: { year: { filename: file } }
+ * Generates the folder path based on date and configured granularity
+ * @param {Date} date - The email date
+ * @returns {string} Folder path (e.g., '2025', '2025/01', '2025/20250315')
  */
-function buildFileCacheForYears(rootFolder, yearsNeeded) {
+function getFolderPath(date) {
+  const year = String(date.getFullYear());
+
+  switch (CONFIG.GRANULARITY) {
+    case 'yearly':
+      return year;
+    case 'monthly':
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      return `${year}/${month}`;
+    case 'daily':
+      const month_d = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}/${year}${month_d}${day}`;
+    default:
+      throw new Error(`Unknown granularity: ${CONFIG.GRANULARITY}`);
+  }
+}
+
+/**
+ * Builds a cache of existing files ONLY for specified folder paths
+ * Much faster than caching all folders when you only need a few
+ * @param {Folder} rootFolder - The root Google Drive folder
+ * @param {Set} pathsNeeded - Set of folder paths to cache (e.g., {'2025/01', '2025/20250215'})
+ * @returns {Object} Cache structure: { 'path': { filename: file } }
+ */
+function buildFileCacheForPaths(rootFolder, pathsNeeded) {
   const cache = {};
 
-  // Only iterate through year folders we actually need
-  const yearFolders = rootFolder.getFolders();
-  while (yearFolders.hasNext()) {
-    const yearFolder = yearFolders.next();
-    const year = yearFolder.getName();
+  // For each path needed, navigate to it and cache files
+  pathsNeeded.forEach(path => {
+    try {
+      const targetFolder = navigateToFolderPath(rootFolder, path);
+      if (targetFolder) {
+        cache[path] = {};
 
-    // Skip folders we don't need (huge speedup if you have many years!)
-    if (!yearsNeeded.has(year)) {
-      continue;
+        const files = targetFolder.getFiles();
+        while (files.hasNext()) {
+          const file = files.next();
+          cache[path][file.getName()] = file;
+        }
+      }
+    } catch (error) {
+      // Folder doesn't exist yet, will be created when saving
+      cache[path] = {};
     }
+  });
 
-    cache[year] = {};
+  return cache;
+}
 
-    // Cache all files in this year folder
-    const files = yearFolder.getFiles();
-    while (files.hasNext()) {
-      const file = files.next();
-      cache[year][file.getName()] = file;
+/**
+ * Navigates to a folder path, returns null if path doesn't exist
+ * @param {Folder} rootFolder - Starting folder
+ * @param {string} path - Path like '2025/01' or '2025/20250315'
+ * @returns {Folder|null} The target folder or null if not found
+ */
+function navigateToFolderPath(rootFolder, path) {
+  const parts = path.split('/');
+  let currentFolder = rootFolder;
+
+  for (const part of parts) {
+    const folders = currentFolder.getFoldersByName(part);
+    if (folders.hasNext()) {
+      currentFolder = folders.next();
+    } else {
+      return null; // Path doesn't exist yet
     }
   }
 
-  return cache;
+  return currentFolder;
 }
 
 /**
@@ -130,26 +179,26 @@ function processSingleEmail(msg, folder, fileCache) {
   const date = msg.getDate();
   const subject = msg.getSubject();
   const filename = generateEmailFilename(msg, date);
-  const year = String(date.getFullYear());
+  const folderPath = getFolderPath(date);
 
   // Check cache first (much faster than Drive API calls)
-  if (fileCache[year] && fileCache[year][filename]) {
+  if (fileCache[folderPath] && fileCache[folderPath][filename]) {
     // Skip duplicate logging to avoid performance overhead (~1 second per 100 emails)
     // Each Logger.log() call costs 10-15ms;
     // Uncomment the line below if you need to see which emails are duplicates (for debugging)
     //Logger.log(`[DUPLICATE] ${date.toISOString()} - ${subject}`);
-    return handleDuplicateEmail(fileCache[year][filename], filename, CONFIG.DUPLICATE_MODE);
+    return handleDuplicateEmail(fileCache[folderPath][filename], filename, CONFIG.DUPLICATE_MODE);
   }
 
   // Get or create folder (not in cache on first run)
-  const yearFolder = getOrCreateYearFolder(folder, date);
-  const savedFile = saveEmailToFolder(yearFolder, filename, msg, date);
+  const targetFolder = getOrCreateFolderPath(folder, folderPath);
+  const savedFile = saveEmailToFolder(targetFolder, filename, msg, date);
 
   // Update cache for future operations
-  if (!fileCache[year]) {
-    fileCache[year] = {};
+  if (!fileCache[folderPath]) {
+    fileCache[folderPath] = {};
   }
-  fileCache[year][filename] = savedFile;
+  fileCache[folderPath][filename] = savedFile;
 
   // Log newly saved emails only (much faster than logging all)
   Logger.log(`[SAVED] ${date.toISOString()} - ${subject}`);
@@ -158,6 +207,28 @@ function processSingleEmail(msg, folder, fileCache) {
     status: 'savedCount',
     timestamp: Math.floor(date.getTime() / 1000),
   };
+}
+
+/**
+ * Gets or creates a folder path, creating intermediate folders as needed
+ * @param {Folder} rootFolder - The root folder
+ * @param {string} path - Path like '2025/01' or '2025/20250315'
+ * @returns {Folder} The target folder
+ */
+function getOrCreateFolderPath(rootFolder, path) {
+  const parts = path.split('/');
+  let currentFolder = rootFolder;
+
+  for (const part of parts) {
+    const folders = currentFolder.getFoldersByName(part);
+    if (folders.hasNext()) {
+      currentFolder = folders.next();
+    } else {
+      currentFolder = currentFolder.createFolder(part);
+    }
+  }
+
+  return currentFolder;
 }
 
 /**
@@ -170,24 +241,6 @@ function generateEmailFilename(msg, date) {
   const subject = msg.getSubject();
   const sanitized = `${date.toISOString()} - ${subject}`.replace(/[\/\\?%*:|"<>]/g, '_');
   return `${sanitized}.eml`;
-}
-
-/**
- * Gets or creates a year-based folder in Google Drive
- * Faster implementation with early return
- * @param {Folder} parentFolder - The parent folder
- * @param {Date} date - The date used to determine the year
- * @returns {Folder} The year folder
- */
-function getOrCreateYearFolder(parentFolder, date) {
-  const year = String(date.getFullYear());
-  const existingFolders = parentFolder.getFoldersByName(year);
-
-  if (existingFolders.hasNext()) {
-    return existingFolders.next();
-  }
-
-  return parentFolder.createFolder(year);
 }
 
 /**
@@ -269,6 +322,7 @@ function logExecutionSummary(startTime, stats, totalMessages) {
     `=== Execution Complete ===
 Saved: ${stats.savedCount} | Skipped: ${stats.skippedCount} | Errors: ${stats.errorCount}
 Total: ${totalMessages} messages processed
-Duration: ${duration}s | Avg: ${avgTime}s/msg`
+Duration: ${duration}s | Avg: ${avgTime}s/msg
+Granularity: ${CONFIG.GRANULARITY}`
   );
 }
