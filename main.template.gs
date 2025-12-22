@@ -23,6 +23,9 @@ const PROPS = {
   LAST_RUN: 'lastRun',
 };
 
+// Script-level Constants (cached at startup)
+const SCRIPT_TIMEZONE = Session.getScriptTimeZone();
+
 /**
  * Main entry point: Saves new emails from Gmail to Google Drive (optimized for speed)
  * Uses batch processing and caching to improve performance
@@ -241,7 +244,7 @@ function getOrCreateFolderPath(rootFolder, path) {
 function generateEmailFilename(date, subject) {
   // Format date using Utilities.formatDate() for local timezone
   // Format: YYYY-MM-DDTHH_MM_SS
-  const timestamp = Utilities.formatDate(date, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH_mm_ss");
+  const timestamp = Utilities.formatDate(date, SCRIPT_TIMEZONE, "yyyy-MM-dd'T'HH_mm_ss");
 
   // Sanitize subject line and remove problematic characters
   const sanitizedSubject = subject.replace(/[\/\\?%*:|"<>]/g, '_');
