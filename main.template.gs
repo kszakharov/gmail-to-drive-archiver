@@ -42,20 +42,20 @@ function saveNewEmailsToDrive() {
     let newestTimestamp = 0;
 
     const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${lastRun}`);
+    const allMessages = GmailApp.getMessagesForThreads(threads);
 
-    // Collect all messages
-    const allMessages = [];
-    threads.forEach(thread => {
-      thread.getMessages().forEach(msg => {
-        if (Math.floor(msg.getDate().getTime() / 1000) > lastRunTimestamp) {
-          allMessages.push(msg);
-        }
-      });
+    // Collect new messages
+    const newMessages = [];
+
+    allMessages.forEach(msg => {
+      if (Math.floor(msg.getDate().getTime() / 1000) > lastRunTimestamp) {
+        newMessages.push(msg);
+      }
     });
 
     // Determine which folder paths we actually need to cache based on granularity
     const pathsNeeded = new Set();
-    allMessages.forEach(msg => {
+    newMessages.forEach(msg => {
       const path = getFolderPath(msg.getDate());
       pathsNeeded.add(path);
     });
@@ -65,10 +65,10 @@ function saveNewEmailsToDrive() {
 
     // Process all messages
     let messageCounter = 0;
-    allMessages.forEach(msg => {
+    newMessages.forEach(msg => {
       try {
         messageCounter++;
-        const result = processSingleEmail(msg, folder, fileCache, messageCounter, allMessages.length);
+        const result = processSingleEmail(msg, folder, fileCache, messageCounter, newMessages.length);
         stats[result.status]++;
 
         if (result.timestamp && result.timestamp > newestTimestamp) {
@@ -81,7 +81,7 @@ function saveNewEmailsToDrive() {
     });
 
     updateLastRunTimestamp(newestTimestamp);
-    logExecutionSummary(startTime, stats, allMessages.length);
+    logExecutionSummary(startTime, stats, newMessages.length);
   } catch (error) {
     Logger.log(`CRITICAL ERROR: ${error.message}`);
     throw error;
