@@ -43,7 +43,7 @@ function saveNewEmailsToDrive() {
 
     const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${lastRun}`);
 
-    // Collect all messages first, then process in batches
+    // Collect all messages
     const allMessages = [];
     threads.forEach(thread => {
       thread.getMessages().forEach(msg => {
@@ -63,30 +63,22 @@ function saveNewEmailsToDrive() {
     // Build cache only for the folder paths we need
     const fileCache = buildFileCacheForPaths(folder, pathsNeeded);
 
-    // Process messages in batches
-    const batchCount = Math.ceil(allMessages.length / CONFIG.BATCH_SIZE);
-    for (let i = 0; i < batchCount; i++) {
-      const start = i * CONFIG.BATCH_SIZE;
-      const end = Math.min(start + CONFIG.BATCH_SIZE, allMessages.length);
-      const batch = allMessages.slice(start, end);
+    // Process all messages
+    let messageCounter = 0;
+    allMessages.forEach(msg => {
+      try {
+        messageCounter++;
+        const result = processSingleEmail(msg, folder, fileCache, messageCounter, allMessages.length);
+        stats[result.status]++;
 
-      batch.forEach(msg => {
-        try {
-          const result = processSingleEmail(msg, folder, fileCache);
-          stats[result.status]++;
-
-          if (result.timestamp && result.timestamp > newestTimestamp) {
-            newestTimestamp = result.timestamp;
-          }
-        } catch (error) {
-          stats.errorCount++;
-          Logger.log(`ERROR processing email: ${error.message}`);
+        if (result.timestamp && result.timestamp > newestTimestamp) {
+          newestTimestamp = result.timestamp;
         }
-      });
-
-      // Log progress every batch
-      Logger.log(`Progress: Processed ${Math.min(end, allMessages.length)}/${allMessages.length} messages`);
-    }
+      } catch (error) {
+        stats.errorCount++;
+        Logger.log(`ERROR processing email: ${error.message}`);
+      }
+    });
 
     updateLastRunTimestamp(newestTimestamp);
     logExecutionSummary(startTime, stats, allMessages.length);
@@ -179,9 +171,11 @@ function navigateToFolderPath(rootFolder, path) {
  * @param {GmailMessage} msg - The email message to process
  * @param {Folder} folder - The root Google Drive folder
  * @param {Object} fileCache - Cached file structure
+ * @param {number} messageCounter - Current message number
+ * @param {number} totalMessages - Total messages to process
  * @returns {Object} Result object with status and timestamp
  */
-function processSingleEmail(msg, folder, fileCache) {
+function processSingleEmail(msg, folder, fileCache, messageCounter, totalMessages) {
   const date = msg.getDate();
   const subject = msg.getSubject();
   const filename = generateEmailFilename(date, subject);
@@ -206,8 +200,8 @@ function processSingleEmail(msg, folder, fileCache) {
   }
   fileCache[folderPath][filename] = savedFile;
 
-  // Log newly saved emails only (much faster than logging all)
-  Logger.log(`[SAVED] ${filename}`);
+  // Log newly saved emails with progress counter
+  Logger.log(`[SAVED] ${messageCounter}/${totalMessages} ${filename}`);
 
   return {
     status: 'savedCount',
