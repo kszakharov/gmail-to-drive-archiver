@@ -41,20 +41,37 @@ function saveNewEmailsToDrive() {
     const lastRunTimestamp = parseInt(lastRun);
     let newestTimestamp = 0;
 
-    const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${lastRun}`);
-    const allMessages = GmailApp.getMessagesForThreads(threads).flat();
-
     // Collect new messages
     const newMessages = [];
     // Determine which folder paths we actually need to cache based on granularity
     const pathsNeeded = new Set();
 
-    allMessages.forEach(msg => {
-      if (Math.floor(msg.getDate().getTime() / 1000) > lastRunTimestamp) {
-        newMessages.push(msg);
-        pathsNeeded.add(getFolderPath(msg.getDate()));
+    let start = 0;
+    const batchSize = 500;  // Max threads per search is 500, cannot exceed this
+    const maxMessages = 2000;
+    while (true) {
+      const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${lastRun}`, start, batchSize);
+      if (threads.length === 0) {
+        Logger.log('No more threads found, ending search.');
+        break;
+      } else {
+        Logger.log(`Found ${threads.length} threads, starting at index ${start}`);
       }
-    });
+      const messages = GmailApp.getMessagesForThreads(threads).flat();
+      Logger.log(`Found ${messages.length} messages on this batch`);
+
+      messages.forEach(msg => {
+        if (Math.floor(msg.getDate().getTime() / 1000) > lastRunTimestamp) {
+          newMessages.push(msg);
+          pathsNeeded.add(getFolderPath(msg.getDate()));
+        }
+      });
+      Logger.log(`Total new messages collected so far: ${newMessages.length}`);
+      if (newMessages.length > maxMessages) {
+        break;
+      }
+      start += batchSize;
+    };
 
     // Build cache only for the folder paths we need
     const fileCache = buildFileCacheForPaths(folder, pathsNeeded);
