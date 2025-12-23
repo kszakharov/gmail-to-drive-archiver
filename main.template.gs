@@ -179,10 +179,7 @@ function processSingleEmail(msg, folder, fileCache, messageCounter, totalMessage
 
   // Check cache first (much faster than Drive API calls)
   if (fileCache[folderPath] && fileCache[folderPath][filename]) {
-    // Skip duplicate logging to avoid performance overhead (~1 second per 100 emails)
-    // Each Logger.log() call costs 10-15ms;
-    // Uncomment the line below if you need to see which emails are duplicates (for debugging)
-    //Logger.log(`[DUPLICATE] ${filename}`);
+    Logger.log(`[DUPLICATE] ${messageCounter}/${totalMessages} ${filename}`);
     return handleDuplicateEmail(fileCache[folderPath][filename], filename, CONFIG.DUPLICATE_MODE);
   }
 
