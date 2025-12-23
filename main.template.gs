@@ -42,17 +42,15 @@ function saveNewEmailsToDrive() {
     let newestTimestamp = 0;
 
     const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${lastRun}`);
-    const allMessages = GmailApp.getMessagesForThreads(threads);
+    const allMessages = GmailApp.getMessagesForThreads(threads).flat();
 
     // Collect new messages
     const newMessages = [];
 
-    allMessages.forEach(thread => {
-      thread.forEach(msg => {
-        if (Math.floor(msg.getDate().getTime() / 1000) > lastRunTimestamp) {
-          newMessages.push(msg);
-        }
-      });
+    allMessages.forEach(msg => {
+      if (Math.floor(msg.getDate().getTime() / 1000) > lastRunTimestamp) {
+        newMessages.push(msg);
+      }
     });
 
     // Determine which folder paths we actually need to cache based on granularity
