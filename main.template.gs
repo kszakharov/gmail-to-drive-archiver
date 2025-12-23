@@ -8,8 +8,6 @@ const CONFIG = {
     IGNORE: 'ignore',
     OVERWRITE: 'overwrite',
   },
-  BATCH_SIZE: 50,
-  CACHE_FOLDER_STRUCTURE: true,
 
   // Folder granularity: 'yearly', 'monthly', or 'daily'
   // yearly:  folder/YYYY/email.eml
@@ -28,7 +26,7 @@ const SCRIPT_TIMEZONE = Session.getScriptTimeZone();
 
 /**
  * Main entry point: Saves new emails from Gmail to Google Drive (optimized for speed)
- * Uses batch processing and caching to improve performance
+ * Uses lazy caching and batch fetching to improve performance
  * Supports multiple folder organization granularities
  */
 function saveNewEmailsToDrive() {
@@ -43,12 +41,11 @@ function saveNewEmailsToDrive() {
 
     // Collect new messages
     const newMessages = [];
-    // Determine which folder paths we actually need to cache based on granularity
-    const pathsNeeded = new Set();
 
     let start = 0;
     const batchSize = 500;  // Max threads per search is 500, cannot exceed this
     const maxMessages = 2000;
+
     while (true) {
       const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${lastRun}`, start, batchSize);
       if (threads.length === 0) {
@@ -57,24 +54,30 @@ function saveNewEmailsToDrive() {
       } else {
         Logger.log(`Found ${threads.length} threads, starting at index ${start}`);
       }
+
       const messages = GmailApp.getMessagesForThreads(threads).flat();
-      Logger.log(`Found ${messages.length} messages on this batch`);
+      Logger.log(`Found ${messages.length} messages in this batch`);
 
       messages.forEach(msg => {
         if (Math.floor(msg.getDate().getTime() / 1000) > lastRunTimestamp) {
           newMessages.push(msg);
-          pathsNeeded.add(getFolderPath(msg.getDate()));
         }
       });
+
       Logger.log(`Total new messages collected so far: ${newMessages.length}`);
+
       if (newMessages.length > maxMessages) {
         break;
       }
-      start += batchSize;
-    };
 
-    // Build cache only for the folder paths we need
-    const fileCache = buildFileCacheForPaths(folder, pathsNeeded);
+      start += batchSize;
+    }
+
+    // Sort messages by date (oldest first) for predictable processing
+    newMessages.sort((a, b) => a.getDate() - b.getDate());
+
+    // Lazy-load cache - build only when needed
+    const fileCache = {};
 
     // Process all messages
     let messageCounter = 0;
@@ -125,35 +128,24 @@ function getFolderPath(date) {
 }
 
 /**
- * Builds a cache of existing files ONLY for specified folder paths
- * Much faster than caching all folders when you only need a few
+ * Builds cache for a single folder path (lazy-loaded on demand)
+ * Only called when processing emails from a new folder
  * @param {Folder} rootFolder - The root Google Drive folder
- * @param {Set} pathsNeeded - Set of folder paths to cache (e.g., {'2025/01', '2025/20250215'})
- * @returns {Object} Cache structure: { 'path': { filename: file } }
+ * @param {string} path - Path like '2025/01' or '2025/20250315'
+ * @param {Object} fileCache - Cache object to populate
  */
-function buildFileCacheForPaths(rootFolder, pathsNeeded) {
-  const cache = {};
+function buildCacheForPath(rootFolder, path, fileCache) {
+  const targetFolder = navigateToFolderPath(rootFolder, path);
+  fileCache[path] = {};
 
-  // For each path needed, navigate to it and cache files
-  pathsNeeded.forEach(path => {
-    try {
-      const targetFolder = navigateToFolderPath(rootFolder, path);
-      if (targetFolder) {
-        cache[path] = {};
-
-        const files = targetFolder.getFiles();
-        while (files.hasNext()) {
-          const file = files.next();
-          cache[path][file.getName()] = file;
-        }
-      }
-    } catch (error) {
-      // Folder doesn't exist yet, will be created when saving
-      cache[path] = {};
+  if (targetFolder) {
+    const files = targetFolder.getFiles();
+    while (files.hasNext()) {
+      const file = files.next();
+      fileCache[path][file.getName()] = file;
     }
-  });
-
-  return cache;
+  }
+  // If targetFolder doesn't exist, fileCache[path] remains empty {}
 }
 
 /**
@@ -180,10 +172,10 @@ function navigateToFolderPath(rootFolder, path) {
 
 /**
  * Processes a single email: validates, checks for duplicates, and saves to Drive
- * Uses cache for faster file lookups
+ * Uses lazy cache for faster file lookups
  * @param {GmailMessage} msg - The email message to process
  * @param {Folder} folder - The root Google Drive folder
- * @param {Object} fileCache - Cached file structure
+ * @param {Object} fileCache - Cached file structure (lazy-loaded)
  * @param {number} messageCounter - Current message number
  * @param {number} totalMessages - Total messages to process
  * @returns {Object} Result object with status and timestamp
@@ -194,8 +186,13 @@ function processSingleEmail(msg, folder, fileCache, messageCounter, totalMessage
   const filename = generateEmailFilename(date, subject);
   const folderPath = getFolderPath(date);
 
+  // Lazy-load cache for this path if not already cached
+  if (!fileCache[folderPath]) {
+    buildCacheForPath(folder, folderPath, fileCache);
+  }
+
   // Check cache first (much faster than Drive API calls)
-  if (fileCache[folderPath] && fileCache[folderPath][filename]) {
+  if (fileCache[folderPath][filename]) {
     Logger.log(`[DUPLICATE] ${messageCounter}/${totalMessages} ${filename}`);
     return handleDuplicateEmail(fileCache[folderPath][filename], filename, CONFIG.DUPLICATE_MODE);
   }
@@ -205,9 +202,6 @@ function processSingleEmail(msg, folder, fileCache, messageCounter, totalMessage
   const savedFile = saveEmailToFolder(targetFolder, filename, msg, date);
 
   // Update cache for future operations
-  if (!fileCache[folderPath]) {
-    fileCache[folderPath] = {};
-  }
   fileCache[folderPath][filename] = savedFile;
 
   // Log newly saved emails with progress counter
