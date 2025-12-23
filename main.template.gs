@@ -35,8 +35,7 @@ function saveNewEmailsToDrive() {
     const stats = { savedCount: 0, skippedCount: 0, errorCount: 0 };
 
     const folder = DriveApp.getFolderById(CONFIG.FOLDER_ID);
-    const lastRun = getLastRunTimestamp();
-    const lastRunTimestamp = parseInt(lastRun);
+    const lastRunTimestamp = getLastRunTimestamp();
     let newestTimestamp = 0;
 
     // Collect new messages
@@ -47,7 +46,7 @@ function saveNewEmailsToDrive() {
     const maxMessages = 2000;
 
     while (true) {
-      const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${lastRun}`, start, batchSize);
+      const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${lastRunTimestamp}`, start, batchSize);
       if (threads.length === 0) {
         Logger.log('No more threads found, ending search.');
         break;
@@ -296,16 +295,30 @@ function saveEmailToFolder(folder, filename, msg, date) {
 
 /**
  * Gets the last run timestamp from script properties
- * @returns {string} The last run timestamp or INITIAL_LAST_RUN
+ * Converts date format YYYY/MM/DD to Unix timestamp
+ * Supports both formats: 'YYYY/MM/DD' or Unix timestamp string
+ * @returns {number} Unix timestamp in seconds
  */
 function getLastRunTimestamp() {
   const props = PropertiesService.getScriptProperties();
-  return props.getProperty(PROPS.LAST_RUN) || CONFIG.INITIAL_LAST_RUN;
+  let lastRun = props.getProperty(PROPS.LAST_RUN) || CONFIG.INITIAL_LAST_RUN;
+
+  // Convert date format YYYY/MM/DD to Unix timestamp
+  // Example: '2004/04/01' -> 1080795600
+  if (typeof lastRun === 'string' && lastRun.includes('/')) {
+    const [year, month, day] = lastRun.split('/');
+    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+    return Math.floor(date.getTime() / 1000);
+  }
+
+  // If already a timestamp (number or string number), return as-is
+  return parseInt(lastRun);
 }
 
 /**
  * Updates the last run timestamp in script properties
- * @param {number} newestTimestamp - The newest email timestamp
+ * Stores as Unix timestamp
+ * @param {number} newestTimestamp - The newest email timestamp in seconds
  */
 function updateLastRunTimestamp(newestTimestamp) {
   if (newestTimestamp <= 0) {
