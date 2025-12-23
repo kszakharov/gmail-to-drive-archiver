@@ -46,18 +46,14 @@ function saveNewEmailsToDrive() {
 
     // Collect new messages
     const newMessages = [];
+    // Determine which folder paths we actually need to cache based on granularity
+    const pathsNeeded = new Set();
 
     allMessages.forEach(msg => {
       if (Math.floor(msg.getDate().getTime() / 1000) > lastRunTimestamp) {
         newMessages.push(msg);
+        pathsNeeded.add(getFolderPath(msg.getDate()));
       }
-    });
-
-    // Determine which folder paths we actually need to cache based on granularity
-    const pathsNeeded = new Set();
-    newMessages.forEach(msg => {
-      const path = getFolderPath(msg.getDate());
-      pathsNeeded.add(path);
     });
 
     // Build cache only for the folder paths we need
