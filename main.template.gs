@@ -51,7 +51,7 @@ function saveNewEmailsToDrive() {
     const newMessages = [];
 
     let start = 0;
-    const batchSize = 500;  // Max threads per search is 500, cannot exceed this
+    const batchSize = 500;  // Gmail limit: max 500 threads per GmailApp.search() and GmailApp.getMessagesForThreads() call
 
     while (true) {
       const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${afterTs} before:${beforeTs}`, start, batchSize);
