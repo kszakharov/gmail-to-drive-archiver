@@ -3,7 +3,13 @@ const CONFIG = {
   DUPLICATE_MODE: '__DUPLICATE_MODE__',
   FOLDER_ID: '__FOLDER_ID__',
   INITIAL_LAST_RUN: '__INITIAL_LAST_RUN__',
+  LOOKBACK_DAYS: '__LOOKBACK_DAYS__',
   SEARCH_QUERY: '__SEARCH_QUERY__',
+
+  get LOOKBACK_SECONDS() {
+    return this.LOOKBACK_DAYS * 86400;
+  },
+
   DUPLICATE_MODES: {
     IGNORE: 'ignore',
     OVERWRITE: 'overwrite',
@@ -35,18 +41,20 @@ function saveNewEmailsToDrive() {
     const stats = { savedCount: 0, skippedCount: 0, errorCount: 0 };
 
     const folder = DriveApp.getFolderById(CONFIG.FOLDER_ID);
-    const lastRunTimestamp = getLastRunTimestamp();
-    let newestTimestamp = 0;
+    const lastRunTs = getLastRunTimestamp();
+
+    const afterTs = lastRunTs;
+    const beforeTs = lastRunTs + CONFIG.LOOKBACK_SECONDS;
+    let newestTs = 0;
 
     // Collect new messages
     const newMessages = [];
 
     let start = 0;
     const batchSize = 500;  // Max threads per search is 500, cannot exceed this
-    const maxMessages = 2000;
 
     while (true) {
-      const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${lastRunTimestamp}`, start, batchSize);
+      const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${afterTs} before:${beforeTs}`, start, batchSize);
       if (threads.length === 0) {
         Logger.log('No more threads found, ending search.');
         break;
@@ -58,16 +66,13 @@ function saveNewEmailsToDrive() {
       Logger.log(`Found ${messages.length} messages in this batch`);
 
       messages.forEach(msg => {
-        if (Math.floor(msg.getDate().getTime() / 1000) > lastRunTimestamp) {
+        const messageTs = Math.floor(msg.getDate().getTime() / 1000);
+        if (afterTs < messageTs && messageTs < beforeTs) {
           newMessages.push(msg);
         }
       });
 
       Logger.log(`Total new messages collected so far: ${newMessages.length}`);
-
-      if (newMessages.length > maxMessages) {
-        break;
-      }
 
       start += batchSize;
     }
@@ -86,8 +91,8 @@ function saveNewEmailsToDrive() {
         const result = processSingleEmail(msg, folder, fileCache, messageCounter, newMessages.length);
         stats[result.status]++;
 
-        if (result.timestamp && result.timestamp > newestTimestamp) {
-          newestTimestamp = result.timestamp;
+        if (result.timestamp && result.timestamp > newestTs) {
+          newestTs = result.timestamp;
         }
       } catch (error) {
         stats.errorCount++;
@@ -95,7 +100,7 @@ function saveNewEmailsToDrive() {
       }
     });
 
-    updateLastRunTimestamp(newestTimestamp);
+    updateLastRunTimestamp(newestTs);
     logExecutionSummary(startTime, stats, newMessages.length);
   } catch (error) {
     Logger.log(`CRITICAL ERROR: ${error.message}`);
@@ -318,17 +323,17 @@ function getLastRunTimestamp() {
 /**
  * Updates the last run timestamp in script properties
  * Stores as Unix timestamp
- * @param {number} newestTimestamp - The newest email timestamp in seconds
+ * @param {number} newestTs - The newest email timestamp in seconds
  */
-function updateLastRunTimestamp(newestTimestamp) {
-  if (newestTimestamp <= 0) {
+function updateLastRunTimestamp(newestTs) {
+  if (newestTs <= 0) {
     Logger.log('No new emails saved, lastRun timestamp not updated');
     return;
   }
 
   const props = PropertiesService.getScriptProperties();
-  props.setProperty(PROPS.LAST_RUN, newestTimestamp);
-  Logger.log(`Updated lastRun to: ${newestTimestamp}`);
+  props.setProperty(PROPS.LAST_RUN, newestTs);
+  Logger.log(`Updated lastRun to: ${newestTs}`);
 }
 
 /**
