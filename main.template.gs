@@ -65,10 +65,10 @@ function saveNewEmailsToDrive() {
       const messages = GmailApp.getMessagesForThreads(threads).flat();
       Logger.log(`Found ${messages.length} messages in this batch`);
 
-      messages.forEach(msg => {
-        const messageTs = Math.floor(msg.getDate().getTime() / 1000);
+      messages.forEach(message => {
+        const messageTs = Math.floor(message.getDate().getTime() / 1000);
         if (afterTs < messageTs && messageTs < beforeTs) {
-          newMessages.push(msg);
+          newMessages.push(message);
         }
       });
 
