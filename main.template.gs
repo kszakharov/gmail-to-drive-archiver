@@ -317,7 +317,7 @@ function getLastRunTimestamp() {
   }
 
   // If already a timestamp (number or string number), return as-is
-  return parseInt(lastRun);
+  return Number(lastRun);
 }
 
 /**
