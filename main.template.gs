@@ -64,34 +64,34 @@ function saveNewEmailsToDrive() {
     }
     Logger.log(`Found ${threads.length} threads`);
 
-    const newMessages = [];
+    const messages = [];
     for (let start = 0; start < threads.length; start += batchSize) {
-      const messages = GmailApp.getMessagesForThreads(threads.slice(start, start + batchSize)).flat();
+      const messagesBatch = GmailApp.getMessagesForThreads(threads.slice(start, start + batchSize)).flat();
 
-      Logger.log(`Found ${messages.length} messages in this batch`);
+      Logger.log(`Found ${messagesBatch.length} messages in this batch`);
 
-      messages.forEach(message => {
+      messagesBatch.forEach(message => {
         const messageTs = Math.floor(message.getDate().getTime() / 1000);
         if (afterTs < messageTs && messageTs < beforeTs) {
-          newMessages.push(message);
+          messages.push(message);
         }
       });
 
-      Logger.log(`Total new messages collected so far: ${newMessages.length}`);
+      Logger.log(`Total new messages collected so far: ${messages.length}`);
     }
 
     // Sort messages by date (oldest first) for deterministic processing (~5s per 1k messages)
-    newMessages.sort((a, b) => a.getDate() - b.getDate());
+    messages.sort((a, b) => a.getDate() - b.getDate());
 
     // Lazy-load cache - build only when needed
     const fileCache = {};
 
     // Process all messages
     let messageCounter = 0;
-    newMessages.forEach(msg => {
+    messages.forEach(message => {
       try {
         messageCounter++;
-        const result = processSingleEmail(msg, folder, fileCache, messageCounter, newMessages.length);
+        const result = processSingleEmail(message, folder, fileCache, messageCounter, messages.length);
         stats[result.status]++;
 
         if (result.timestamp && result.timestamp > newestTs) {
@@ -104,7 +104,7 @@ function saveNewEmailsToDrive() {
     });
 
     updateLastRunTimestamp(newestTs);
-    logExecutionSummary(startTime, stats, newMessages.length);
+    logExecutionSummary(startTime, stats, messages.length);
   } catch (error) {
     Logger.log(`CRITICAL ERROR: ${error.message}`);
     throw error;
@@ -192,16 +192,16 @@ function navigateToFolderPath(rootFolder, path) {
 /**
  * Processes a single email: validates, checks for duplicates, and saves to Drive
  * Uses lazy cache for faster file lookups
- * @param {GmailMessage} msg - The email message to process
+ * @param {GmailMessage} message - The email message to process
  * @param {Folder} folder - The root Google Drive folder
  * @param {Object} fileCache - Cached file structure (lazy-loaded)
  * @param {number} messageCounter - Current message number
  * @param {number} totalMessages - Total messages to process
  * @returns {Object} Result object with status and timestamp
  */
-function processSingleEmail(msg, folder, fileCache, messageCounter, totalMessages) {
-  const date = msg.getDate();
-  const subject = msg.getSubject();
+function processSingleEmail(message, folder, fileCache, messageCounter, totalMessages) {
+  const date = message.getDate();
+  const subject = message.getSubject();
   const filename = generateEmailFilename(date, subject);
   const folderPath = getFolderPath(date);
 
@@ -218,7 +218,7 @@ function processSingleEmail(msg, folder, fileCache, messageCounter, totalMessage
 
   // Get or create folder (not in cache on first run)
   const targetFolder = getOrCreateFolderPath(folder, folderPath);
-  const savedFile = saveEmailToFolder(targetFolder, filename, msg, date);
+  const savedFile = saveEmailToFolder(targetFolder, filename, message, date);
 
   // Update cache for future operations
   fileCache[folderPath][filename] = savedFile;
@@ -297,12 +297,12 @@ function handleDuplicateEmail(existingFile, filename, duplicateMode) {
  * Saves the email as an .eml file to the specified folder
  * @param {Folder} folder - The folder to save to
  * @param {string} filename - The filename
- * @param {GmailMessage} msg - The email message
+ * @param {GmailMessage} message - The email message
  * @param {Date} date - The email date
  * @returns {File} The created file
  */
-function saveEmailToFolder(folder, filename, msg, date) {
-  const file = folder.createFile(filename, msg.getRawContent(), MIMETYPE_EMAIL);
+function saveEmailToFolder(folder, filename, message, date) {
+  const file = folder.createFile(filename, message.getRawContent(), MIMETYPE_EMAIL);
 
   // Set file metadata to match the email's received date
   Drive.Files.update(
