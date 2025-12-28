@@ -30,6 +30,8 @@ const PROPS = {
 // Script-level Constants (cached at startup)
 const SCRIPT_TIMEZONE = Session.getScriptTimeZone();
 
+const MIMETYPE_EMAIL = 'message/rfc822';
+
 /**
  * Main entry point: Saves new emails from Gmail to Google Drive (optimized for speed)
  * Uses lazy caching and batch fetching to improve performance
@@ -47,22 +49,25 @@ function saveNewEmailsToDrive() {
     const beforeTs = lastRunTs + CONFIG.LOOKBACK_SECONDS;
     let newestTs = 0;
 
-    // Collect new messages
-    const newMessages = [];
-
-    let start = 0;
     const batchSize = 500;  // Gmail limit: max 500 threads per GmailApp.search() and GmailApp.getMessagesForThreads() call
 
+    Logger.log(`Searching for emails between ${formatDate(afterTs)} and ${formatDate(beforeTs)}`);
+
+    const threads = [];
     while (true) {
-      const threads = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${afterTs} before:${beforeTs}`, start, batchSize);
-      if (threads.length === 0) {
+      const threadsBatch = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${afterTs} before:${beforeTs}`, threads.length, batchSize);
+      if (threadsBatch.length === 0) {
         Logger.log('No more threads found, ending search.');
         break;
-      } else {
-        Logger.log(`Found ${threads.length} threads, starting at index ${start}`);
       }
+      threads.push(...threadsBatch);
+    }
+    Logger.log(`Found ${threads.length} threads`);
 
-      const messages = GmailApp.getMessagesForThreads(threads).flat();
+    const newMessages = [];
+    for (let start = 0; start < threads.length; start += batchSize) {
+      const messages = GmailApp.getMessagesForThreads(threads.slice(start, start + batchSize)).flat();
+
       Logger.log(`Found ${messages.length} messages in this batch`);
 
       messages.forEach(message => {
@@ -73,11 +78,9 @@ function saveNewEmailsToDrive() {
       });
 
       Logger.log(`Total new messages collected so far: ${newMessages.length}`);
-
-      start += batchSize;
     }
 
-    // Sort messages by date (oldest first) for predictable processing
+    // Sort messages by date (oldest first) for deterministic processing (~5s per 1k messages)
     newMessages.sort((a, b) => a.getDate() - b.getDate());
 
     // Lazy-load cache - build only when needed
@@ -129,6 +132,18 @@ function getFolderPath(date) {
     default:
       throw new Error(`Unknown granularity: ${CONFIG.GRANULARITY}`);
   }
+}
+
+/**
+ * Formats a Date or Unix timestamp (seconds) to `yyyy-MM-dd HH:mm` in script timezone.
+ * @param {Date|number} date - Date object or Unix timestamp in seconds.
+ * @returns {string} Formatted date string.
+ */
+function formatDate(date) {
+  if (typeof date === 'number') {
+    date = new Date(date * 1000);
+  }
+  return Utilities.formatDate(date, SCRIPT_TIMEZONE, 'yyyy-MM-dd HH:mm');
 }
 
 /**
@@ -287,7 +302,7 @@ function handleDuplicateEmail(existingFile, filename, duplicateMode) {
  * @returns {File} The created file
  */
 function saveEmailToFolder(folder, filename, msg, date) {
-  const file = folder.createFile(filename, msg.getRawContent(), MimeType.PLAIN_TEXT);
+  const file = folder.createFile(filename, msg.getRawContent(), MIMETYPE_EMAIL);
 
   // Set file metadata to match the email's received date
   Drive.Files.update(
