@@ -30,6 +30,7 @@ const PROPS = {
 // Script-level Constants (cached at startup)
 const SCRIPT_TIMEZONE = Session.getScriptTimeZone();
 const SCRIPT_PROPS = PropertiesService.getScriptProperties();
+const SCRIPT_LOCK = LockService.getScriptLock();
 
 const MIMETYPE_EMAIL = 'message/rfc822';
 const MAX_EXECUTION_TIME_SECONDS = 360;  // 6 minutes
@@ -52,6 +53,11 @@ function saveNewEmailsToDrive() {
 
     const batchSize = 500;  // Gmail limit: max 500 threads per GmailApp.search() and GmailApp.getMessagesForThreads() call
 
+    // try to acquire lock immediately
+    if (!SCRIPT_LOCK.tryLock(0)) {
+      Logger.log('Another instance is already running. Exiting.');
+      return;
+    }
     Logger.log(`Searching for emails between ${formatDate(afterTs)} and ${formatDate(beforeTs)}`);
 
     const threads = [];
@@ -128,6 +134,8 @@ function saveNewEmailsToDrive() {
       SCRIPT_PROPS.setProperty(PROPS.LAST_RUN, latestMessageTs);
       Logger.log(`Updated lastRun to: ${latestMessageTs} (${formatDate(latestMessageTs)})`);
     }
+
+    SCRIPT_LOCK.releaseLock();
 
     logExecutionSummary(startTime, stats, messages.length);
   } catch (error) {
