@@ -47,7 +47,6 @@ function saveNewEmailsToDrive() {
 
     const afterTs = lastRunTs;
     const beforeTs = lastRunTs + CONFIG.LOOKBACK_SECONDS;
-    let newestTs = 0;
 
     const batchSize = 500;  // Gmail limit: max 500 threads per GmailApp.search() and GmailApp.getMessagesForThreads() call
 
@@ -87,23 +86,28 @@ function saveNewEmailsToDrive() {
     const fileCache = {};
 
     // Process all messages
+    let latestMessage = null;
     let messageCounter = 0;
     messages.forEach(message => {
       try {
         messageCounter++;
         const result = processSingleEmail(message, folder, fileCache, messageCounter, messages.length);
         stats[result.status]++;
+        latestMessage = message;
 
-        if (result.timestamp && result.timestamp > newestTs) {
-          newestTs = result.timestamp;
-        }
       } catch (error) {
         stats.errorCount++;
         Logger.log(`ERROR processing email: ${error.message}`);
       }
     });
 
-    updateLastRunTimestamp(newestTs);
+    if (latestMessage) {
+      const latestMessageTs = Math.floor(latestMessage.getDate().getTime() / 1000);
+      const props = PropertiesService.getScriptProperties();
+      props.setProperty(PROPS.LAST_RUN, latestMessageTs);
+      Logger.log(`Updated lastRun to: ${latestMessageTs}`);
+    }
+
     logExecutionSummary(startTime, stats, messages.length);
   } catch (error) {
     Logger.log(`CRITICAL ERROR: ${error.message}`);
@@ -333,22 +337,6 @@ function getLastRunTimestamp() {
 
   // If already a timestamp (number or string number), return as-is
   return Number(lastRun);
-}
-
-/**
- * Updates the last run timestamp in script properties
- * Stores as Unix timestamp
- * @param {number} newestTs - The newest email timestamp in seconds
- */
-function updateLastRunTimestamp(newestTs) {
-  if (newestTs <= 0) {
-    Logger.log('No new emails saved, lastRun timestamp not updated');
-    return;
-  }
-
-  const props = PropertiesService.getScriptProperties();
-  props.setProperty(PROPS.LAST_RUN, newestTs);
-  Logger.log(`Updated lastRun to: ${newestTs}`);
 }
 
 /**
