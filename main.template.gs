@@ -32,6 +32,7 @@ const SCRIPT_TIMEZONE = Session.getScriptTimeZone();
 const SCRIPT_PROPS = PropertiesService.getScriptProperties();
 
 const MIMETYPE_EMAIL = 'message/rfc822';
+const MAX_EXECUTION_TIME_SECONDS = 360;  // 6 minutes
 
 /**
  * Main entry point: Saves new emails from Gmail to Google Drive (optimized for speed)
@@ -41,7 +42,7 @@ const MIMETYPE_EMAIL = 'message/rfc822';
 function saveNewEmailsToDrive() {
   try {
     const startTime = new Date();
-    const stats = { savedCount: 0, skippedCount: 0, errorCount: 0 };
+    const stats = { savedCount: 0, skippedCount: 0, errorCount: 0, unprocessedCount: 0 };
 
     const folder = DriveApp.getFolderById(CONFIG.FOLDER_ID);
     const lastRunTs = getLastRunTimestamp();
@@ -89,7 +90,12 @@ function saveNewEmailsToDrive() {
     // Process all messages
     let latestMessage = null;
     let messageCounter = 0;
-    messages.forEach(message => {
+    for (const message of messages) {
+      if (getExecutionSecondsLeft(startTime) < 5) {
+        Logger.log('Approaching execution time limit, stopping processing.');
+        stats.unprocessedCount = messages.length - messageCounter;
+        break;
+      }
       try {
         messageCounter++;
         const result = processSingleEmail(message, folder, fileCache, messageCounter, messages.length);
@@ -99,8 +105,9 @@ function saveNewEmailsToDrive() {
       } catch (error) {
         stats.errorCount++;
         Logger.log(`ERROR processing email: ${error.message}`);
+        break;
       }
-    });
+    }
 
     if (latestMessage) {
       const latestMessageTs = Math.floor(latestMessage.getDate().getTime() / 1000);
@@ -148,6 +155,17 @@ function formatDate(date) {
     date = new Date(date * 1000);
   }
   return Utilities.formatDate(date, SCRIPT_TIMEZONE, 'yyyy-MM-dd HH:mm');
+}
+
+/**
+ * Returns the remaining execution time for the current script run.
+ * @param {Date} startTime - The execution start time
+ * @returns {number} Seconds left in the execution window
+ */
+function getExecutionSecondsLeft(startTime) {
+  const now = new Date();
+  const diff = (now.getTime() - startTime.getTime()) / 1000;
+  return MAX_EXECUTION_TIME_SECONDS - diff;
 }
 
 /**
@@ -347,11 +365,11 @@ function getLastRunTimestamp() {
 function logExecutionSummary(startTime, stats, totalMessages) {
   const endTime = new Date();
   const duration = ((endTime - startTime) / 1000).toFixed(2);
-  const avgTime = (duration / Math.max(totalMessages, 1)).toFixed(3);
+  const avgTime = (duration / Math.max(totalMessages - stats.unprocessedCount, 1)).toFixed(3);
 
   Logger.log(
     `=== Execution Complete ===
-Saved: ${stats.savedCount} | Skipped: ${stats.skippedCount} | Errors: ${stats.errorCount}
+Saved: ${stats.savedCount} | Skipped: ${stats.skippedCount} | Errors: ${stats.errorCount} | Unprocessed: ${stats.unprocessedCount}
 Total: ${totalMessages} messages processed
 Duration: ${duration}s | Avg: ${avgTime}s/msg
 Granularity: ${CONFIG.GRANULARITY}`
