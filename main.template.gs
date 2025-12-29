@@ -47,8 +47,8 @@ function saveNewEmailsToDrive() {
     const folder = DriveApp.getFolderById(CONFIG.FOLDER_ID);
     const lastRunTs = getLastRunTimestamp();
 
-    const afterTs = lastRunTs;
-    const beforeTs = lastRunTs + CONFIG.LOOKBACK_SECONDS;
+    var afterTs = lastRunTs - 2;
+    var beforeTs = afterTs + CONFIG.LOOKBACK_SECONDS;
 
     const batchSize = 500;  // Gmail limit: max 500 threads per GmailApp.search() and GmailApp.getMessagesForThreads() call
 
@@ -58,8 +58,22 @@ function saveNewEmailsToDrive() {
     while (true) {
       const threadsBatch = GmailApp.search(`${CONFIG.SEARCH_QUERY} after:${afterTs} before:${beforeTs}`, threads.length, batchSize);
       if (threadsBatch.length === 0) {
-        Logger.log('No more threads found, ending search.');
-        break;
+        if (threads.length === 0) {
+          Logger.log('No emails found in the specified date range.');
+
+          SCRIPT_PROPS.setProperty(PROPS.LAST_RUN, beforeTs);
+          Logger.log(`Updated lastRun to: ${beforeTs} (${formatDate(beforeTs)})`);
+
+          var afterTs = beforeTs - 1;
+          var beforeTs = afterTs + CONFIG.LOOKBACK_SECONDS;
+
+          Logger.log(`Searching for emails between ${formatDate(afterTs)} and ${formatDate(beforeTs)}`);
+
+          continue;
+        } else {
+          // No more emails found in the specified date range
+          break;
+        }
       }
       threads.push(...threadsBatch);
     }
@@ -112,7 +126,7 @@ function saveNewEmailsToDrive() {
     if (latestMessage) {
       const latestMessageTs = Math.floor(latestMessage.getDate().getTime() / 1000);
       SCRIPT_PROPS.setProperty(PROPS.LAST_RUN, latestMessageTs);
-      Logger.log(`Updated lastRun to: ${latestMessageTs}`);
+      Logger.log(`Updated lastRun to: ${latestMessageTs} (${formatDate(latestMessageTs)})`);
     }
 
     logExecutionSummary(startTime, stats, messages.length);
@@ -154,7 +168,7 @@ function formatDate(date) {
   if (typeof date === 'number') {
     date = new Date(date * 1000);
   }
-  return Utilities.formatDate(date, SCRIPT_TIMEZONE, 'yyyy-MM-dd HH:mm');
+  return Utilities.formatDate(date, SCRIPT_TIMEZONE, 'yyyy-MM-dd HH:mm:ss');
 }
 
 /**
