@@ -29,6 +29,7 @@ const PROPS = {
 
 // Script-level Constants (cached at startup)
 const SCRIPT_TIMEZONE = Session.getScriptTimeZone();
+const SCRIPT_PROPS = PropertiesService.getScriptProperties();
 
 const MIMETYPE_EMAIL = 'message/rfc822';
 
@@ -103,8 +104,7 @@ function saveNewEmailsToDrive() {
 
     if (latestMessage) {
       const latestMessageTs = Math.floor(latestMessage.getDate().getTime() / 1000);
-      const props = PropertiesService.getScriptProperties();
-      props.setProperty(PROPS.LAST_RUN, latestMessageTs);
+      SCRIPT_PROPS.setProperty(PROPS.LAST_RUN, latestMessageTs);
       Logger.log(`Updated lastRun to: ${latestMessageTs}`);
     }
 
@@ -324,8 +324,7 @@ function saveEmailToFolder(folder, filename, message, date) {
  * @returns {number} Unix timestamp in seconds
  */
 function getLastRunTimestamp() {
-  const props = PropertiesService.getScriptProperties();
-  let lastRun = props.getProperty(PROPS.LAST_RUN) || CONFIG.INITIAL_LAST_RUN;
+  let lastRun = SCRIPT_PROPS.getProperty(PROPS.LAST_RUN) || CONFIG.INITIAL_LAST_RUN;
 
   // Convert date format YYYY/MM/DD to Unix timestamp
   // Example: '2004/04/01' -> 1080795600
