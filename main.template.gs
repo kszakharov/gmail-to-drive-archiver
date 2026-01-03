@@ -43,13 +43,14 @@ const MAX_EXECUTION_TIME_SECONDS = 360;  // 6 minutes
 function saveNewEmailsToDrive() {
   try {
     const startTime = new Date();
+    const startTs = startTime.getTime() / 1000;
     const stats = { savedCount: 0, skippedCount: 0, errorCount: 0, unprocessedCount: 0 };
 
     const folder = DriveApp.getFolderById(CONFIG.FOLDER_ID);
     const lastRunTs = getLastRunTimestamp();
 
     var afterTs = lastRunTs - 2;
-    var beforeTs = afterTs + CONFIG.LOOKBACK_SECONDS;
+    var beforeTs = Math.min(afterTs + CONFIG.LOOKBACK_SECONDS, startTs);
 
     const batchSize = 500;  // Gmail limit: max 500 threads per GmailApp.search() and GmailApp.getMessagesForThreads() call
 
@@ -67,6 +68,12 @@ function saveNewEmailsToDrive() {
         if (threads.length === 0) {
           Logger.log('No emails found in the specified date range.');
 
+          if (beforeTs >= startTs) {
+            Logger.log('Reached current time, nothing more to search');
+            break;
+          }
+
+          // Move the window forward
           SCRIPT_PROPS.setProperty(PROPS.LAST_RUN, beforeTs);
           Logger.log(`Updated lastRun to: ${beforeTs} (${formatDate(beforeTs)})`);
 
