@@ -70,6 +70,11 @@ function saveNewEmailsToDrive() {
 
           if (beforeTs >= startTs) {
             Logger.log('Reached current time, nothing more to search');
+            if (threads.length === 0) {
+              // No emails found at all, update lastRun to current time
+              SCRIPT_PROPS.setProperty(PROPS.LAST_RUN, startTs);
+              Logger.log(`Updated lastRun to: ${startTs} (${formatDate(startTs)})`);
+            }
             break;
           }
 
@@ -137,9 +142,13 @@ function saveNewEmailsToDrive() {
     }
 
     if (latestMessage) {
-      const latestMessageTs = Math.floor(latestMessage.getDate().getTime() / 1000);
-      SCRIPT_PROPS.setProperty(PROPS.LAST_RUN, latestMessageTs);
-      Logger.log(`Updated lastRun to: ${latestMessageTs} (${formatDate(latestMessageTs)})`);
+      const latestRunTs =
+        latestMessage === messages[messages.length - 1]
+          ? Math.min(beforeTs, startTs)
+          : Math.floor(latestMessage.getDate().getTime() / 1000);
+
+      SCRIPT_PROPS.setProperty(PROPS.LAST_RUN, latestRunTs);
+      Logger.log(`Updated lastRun to: ${latestRunTs} (${formatDate(latestRunTs)})`);
     }
 
     SCRIPT_LOCK.releaseLock();
